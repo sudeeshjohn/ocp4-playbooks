@@ -20,7 +20,7 @@
   when: chronyconfig.enabled
 
 - name: OCP config
-  when: inventory_hostname in groups['bastion'][0]
+  when: inventory_hostname == groups['bastion'][0]
   block:
   - name: Skip config if install workdir exist
     stat:
@@ -33,11 +33,8 @@
   - name: Setup openshift workdir
     file:
       path: "{{ workdir }}"
-      state: "{{ item }}"
+      state: directory
       mode: '0755'
-    with_items:
-  #  - absent
-    - directory
 
   - name: Generate install-config.yaml
     template:
@@ -90,7 +87,7 @@
     lineinfile:
       path: "{{ workdir }}/manifests/cluster-scheduler-02-config.yml"
       regexp: '^(.*)mastersSchedulable: true'
-      line: '\1mastersSchedulable: False'
+      line: '\1mastersSchedulable: false'
       backrefs: yes
     when: worker_count|int > 0
 
@@ -123,10 +120,97 @@
       - master
     when: kdump.enabled
 
+  - name: Inject Day-0 SLAAC-disabled MachineConfigs
+    copy:
+      dest: >-
+        {{ workdir }}/openshift/99-{{ item }}-disable-ipv6-slaac.yaml
+      mode: "0644"
+      content: |
+        apiVersion: machineconfiguration.openshift.io/v1
+        kind: MachineConfig
+        metadata:
+          name: 99-{{ item }}-disable-ipv6-slaac
+          labels:
+            machineconfiguration.openshift.io/role: {{ item }}
+        spec:
+          config:
+            ignition:
+              version: 3.4.0
+            storage:
+              files:
+                - path: /etc/sysctl.d/99-disable-ipv6-slaac.conf
+                  mode: 0644
+                  overwrite: true
+                  contents:
+                    inline: |
+                      # Defaults inherited by interfaces created later (e.g. br-ex).
+                      net.ipv6.conf.default.accept_ra = 1
+                      net.ipv6.conf.default.autoconf = 0
+
+                      # Apply to interfaces already available.
+                      net.ipv6.conf.all.accept_ra = 1
+                      net.ipv6.conf.all.autoconf = 0
+
+                      # Explicit OpenShift interfaces. Missing interfaces are non-fatal.
+                      -net.ipv6.conf.env2.accept_ra = 1
+                      -net.ipv6.conf.env2.autoconf = 0
+                      -net.ipv6.conf.br-ex.accept_ra = 1
+                      -net.ipv6.conf.br-ex.autoconf = 0
+    loop:
+      - master
+      - worker
+    when: disable_ipv6_slaac | default(false) | bool
+
+  - name: Verify Day-0 SLAAC-disabled MachineConfigs exist
+    stat:
+      path: >-
+        {{ workdir }}/openshift/99-{{ item }}-disable-ipv6-slaac.yaml
+    loop:
+      - master
+      - worker
+    register: slaac_machineconfig_files
+    when: disable_ipv6_slaac | default(false) | bool
+
+  - name: Fail when a Day-0 SLAAC MachineConfig is missing
+    fail:
+      msg: >-
+        SLAAC-disabled MachineConfig was not generated for role
+        {{ item.item }}.
+    loop: "{{ slaac_machineconfig_files.results | default([]) }}"
+    when:
+      - disable_ipv6_slaac | default(false) | bool
+      - not item.stat.exists
+
   - name: Create ignition files
     shell: "{{ disable_image_policy_env }}OPENSHIFT_INSTALL_RELEASE_IMAGE_OVERRIDE={{ release_image_override }} openshift-install create ignition-configs --log-level {{ log_level }}"
     args:
       chdir: "{{ workdir }}"
+
+  - name: Verify SLAAC configuration is present in master Ignition
+    command:
+      argv:
+        - jq
+        - -e
+        - >-
+          .storage.files[]?
+          | select(.path == "/etc/sysctl.d/99-disable-ipv6-slaac.conf")
+        - "{{ workdir }}/master.ign"
+    changed_when: false
+    when: disable_ipv6_slaac | default(false) | bool
+
+  - name: Verify SLAAC configuration is present in worker Ignition
+    command:
+      argv:
+        - jq
+        - -e
+        - >-
+          .storage.files[]?
+          | select(.path == "/etc/sysctl.d/99-disable-ipv6-slaac.conf")
+        - "{{ workdir }}/worker.ign"
+    changed_when: false
+    when:
+      - disable_ipv6_slaac | default(false) | bool
+      - worker_count | int > 0
 
   - name: Copy update_ignition_bootstrap
     template:
