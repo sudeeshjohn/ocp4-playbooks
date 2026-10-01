@@ -41,7 +41,7 @@
 
 - name: Apply mirrored release image signature config
   shell: |
-    oc apply -f {{ repo_image_dir }}/mirror/config/signature-sha256-{{ upgrade_image_sha_key.stdout[:16] }}.yaml
+    oc apply -f {{ repo_image_dir }}/mirror/config/signature-sha256-{{ upgrade_image_sha_key.stdout[:16] }}.json
 
 - name: Get the OCP version 
   kubernetes.core.k8s_info:
@@ -60,6 +60,18 @@
       data:
         ack-4.8-kube-1.22-api-removals-in-4.9: "true"
   when: ocp_version.resources[0].status.history[0].version | regex_search('4.8') == "4.8"
+
+- name: Providing the administrator acknowledgement for 4.13 to 4.14 upgrades
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      kind: ConfigMap
+      metadata:
+        name: admin-acks
+        namespace: openshift-config
+      data:
+        ack-4.13-kube-1.27-api-removals-in-4.14: "true"
+  when: ocp_version.resources[0].status.history[0].version | regex_search('4.13') == "4.13"
 
 - name: Upgrade ocp and check for its completion
   block:

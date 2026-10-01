@@ -5,6 +5,9 @@ workdir: ~/ocp4-workdir
 rhcos_pre_kernel_options: []
 log_level: info
 release_image_override: ""
+
+# IBM/Red Hat QE Only: Disables ClusterImagePolicy so Nightly builds can be deployed. This feature puts a cluster in unsupported mode.
+qe_only_disable_image_policy: false
 proxy_url: ""
 no_proxy: ""
 enable_local_registry: false
@@ -30,3 +33,11 @@ luks:
       - aes-cbc-essiv:sha256
    wipeVolume: true
    name: root
+kdump:
+  enabled: false
+  commandline_remove: "hugepages hugepagesz slub_debug quiet log_buf_len swiotlb"
+  commandline_append: "irqpoll maxcpus=1 reset_devices cgroup_disable=memory mce=off numa=off udev.children-max=2 panic=10 rootflags=nofail acpi_no_memhotplug transparent_hugepage=never nokaslr novmcoredd hest_disable srcutree.big_cpu_lim=0"
+  kexec_args: "-s"
+  kdump_img: "vmlinuz"
+  log_path: "/var/crash"
+  crash_kernel_memory: "2G-4G:384M,4G-16G:512M,16G-64G:1G,64G-128G:2G,128G-:4G"
